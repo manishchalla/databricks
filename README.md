@@ -309,7 +309,7 @@ SELECT * FROM csv.`/Volumes/prod/sales/my_volume/data.csv`;
 
 -- List files in a Volume
 LIST '/Volumes/prod/sales/my_volume/';
-
+```
 
 
 ---
