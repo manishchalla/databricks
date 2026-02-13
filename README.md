@@ -23,6 +23,23 @@
     * **Storage:** Connects to your Blob Storage/ADLS Gen2 where the data files sit.
 * *Key Takeaway:* Databricks processes data "in place" within your security boundary.
 
+---
+
+## 💧 11. Next-Gen Optimization: Liquid Clustering
+**Concept:** A new dynamic data layout that replaces standard Partitioning and Z-Ordering.
+
+### **Liquid Clustering**
+* **The Problem with Partitioning:** You have to pick physical columns (e.g., Year/Month). If you pick the wrong one, you get "Small File" issues. Changing it requires rewriting the whole table.
+* **The Solution:** Liquid Clustering automatically clusters data based on usage patterns without creating rigid physical folders.
+* **Benefits:**
+    * Solves the "Small File Problem" automatically.
+    * Adapts to uneven data (skew).
+    * **Replaces** both Partitioning and Z-Ordering.
+
+**Command:**
+```sql
+CREATE TABLE sales (id INT, city STRING)
+CLUSTER BY (city); -- No 'PARTITIONED BY' needed!
 
 
 ---
