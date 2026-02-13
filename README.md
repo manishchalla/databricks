@@ -200,7 +200,7 @@ WHEN NOT MATCHED THEN
 
 ---
 
-## 🕰️ 10. Deep Dive: Delta Lake Internals (Video 16)
+## 🕰️ 10. Deep Dive: Delta Lake Internals
 **Concept:** How Databricks achieves ACID properties, Time Travel, and Scalability using the `_delta_log`.
 
 ### **1. The Transaction Log (`_delta_log`)**
@@ -313,5 +313,111 @@ LIST '/Volumes/prod/sales/my_volume/';
 
 
 ---
+---
+
+## 🛠️ 13. Databricks Utilities (DBUtils) & Widgets
+**Concept:** A built-in library (`dbutils`) that acts as the "Swiss Army Knife" for Databricks. It allows you to interact with the file system, chain notebooks, and create input parameters.
+
+### **1. File System Utilities (`dbutils.fs`)**
+While `%fs` is good for quick checks, `dbutils.fs` allows you to manage files using Python code (loops, variables, logic).
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `ls(path)` | List files in a directory. | `dbutils.fs.ls("/tmp")` |
+| `cp(src, dst)` | Copy a file. | `dbutils.fs.cp("/src/file.csv", "/dst/backup.csv")` |
+| `mv(src, dst)` | Move/Rename a file. | `dbutils.fs.mv("/src/old.csv", "/src/new.csv")` |
+| `rm(path, recurse)` | Remove a file or folder. | `dbutils.fs.rm("/tmp/folder", True)` (True = delete contents) |
+| `put(path, content)` | Create a simple file. | `dbutils.fs.put("/tmp/hello.txt", "Hello World!", True)` |
+| `head(path)` | Read the first few bytes of a file. | `dbutils.fs.head("/tmp/hello.txt")` |
+| `mount(...)` | **Legacy:** Connect to Cloud Storage. | *(Use Unity Catalog Volumes instead)* |
+
+### **2. Widgets (Parameters)**
+**Concept:** Make your notebook dynamic by adding input fields at the top. This allows you to pass arguments when running a notebook as a Job.
+
+* **Types:** Text, Dropdown, Combobox, Multiselect.
+* **Workflow:**
+    1.  Create the widget.
+    2.  Get the value into a variable.
+    3.  Use the variable in your logic.
+
+```python
+# 1. Create a Dropdown for "Department"
+dbutils.widgets.dropdown("dept_param", "HR", ["HR", "IT", "Sales"])
+
+# 2. Capture the user's selection
+selected_dept = dbutils.widgets.get("dept_param")
+
+# 3. Use it in SQL or Python
+# spark.sql(f"SELECT * FROM employees WHERE dept = '{selected_dept}'")
+print(f"Selected Department: {selected_dept}")
+```
+
+### **3. Notebook Chaining (`dbutils.notebook`)**
+**Concept:** Running one notebook inside another. This allows you to build modular pipelines (e.g., a "Setup" notebook called by an "Analysis" notebook).
+
+* **Command:** `dbutils.notebook.run(path, timeout_seconds, arguments)`
+* **Exit:** `dbutils.notebook.exit(value)` (Returns a value to the parent notebook).
+
+```python
+# Run the "Setup_Config" notebook and wait 60 seconds
+# result = dbutils.notebook.run("./Setup_Config", 60, {"env": "prod"})
+# print(result)
+```
+
+### **4. Secrets (`dbutils.secrets`)**
+**Concept:** securely storing passwords/keys instead of hardcoding them.
+* **Command:** `password = dbutils.secrets.get(scope="my-scope", key="db-password")`
+
+---
+
+### **Hands-On Practice Code**
+
+```python
+# --- PART 1: WIDGET PRACTICE ---
+
+# 1. Create a Widget (Look at the top of your notebook after running this!)
+dbutils.widgets.dropdown("environment", "DEV", ["DEV", "QA", "PROD"])
+
+# 2. Get the value
+current_env = dbutils.widgets.get("environment")
+
+# 3. Use logic based on the widget
+print(f"🚀 Running logic for: {current_env}")
+
+if current_env == "PROD":
+    print("⚠️ CAUTION: You are in Production!")
+else:
+    print("✅ Safe to test.")
+
+# --- PART 2: FILE SYSTEM (DBUtils FS) PRACTICE ---
+
+# 1. Create a directory for practice
+base_path = "dbfs:/tmp/dbutils_practice"
+# dbutils.fs.mkdirs(base_path) # Uncomment to run
+
+# 2. Create a dummy file programmatically
+file_path = f"{base_path}/config.txt"
+content = "Database=SalesDB\nUser=Admin"
+
+# The 'True' argument means "Overwrite if exists"
+# dbutils.fs.put(file_path, content, True)
+print(f"File path defined: {file_path}")
+
+# 3. List the files to verify
+# files = dbutils.fs.ls(base_path)
+# for f in files:
+#    print(f"Found: {f.name} (Size: {f.size} bytes)")
+
+# 4. Read the file content
+# read_content = dbutils.fs.head(file_path)
+# print("\n--- File Content ---")
+# print(read_content)
+# print("--------------------")
+
+# 5. Cleanup (Delete everything)
+# dbutils.fs.rm(base_path, True)
+```
+---
+
 
 
