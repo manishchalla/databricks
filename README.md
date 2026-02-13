@@ -157,8 +157,10 @@ WHEN NOT MATCHED THEN
 
 ---
 
-## 🚀 9. Optimization Essentials 
-**Concept:** Before understanding Delta Lake internals, you must understand how Spark reads data efficiently.
+---
+
+## 🚀 9. Optimization Essentials (Video 16 Prerequisites)
+**Concept:** Before diving into Delta Lake internals, you must understand how Spark reads data efficiently.
 
 ### **1. Partitioning (The "Folder" Strategy)**
 * **What is it?** Breaking a large table into sub-folders based on a column (e.g., `year=2023/month=01`).
@@ -169,7 +171,9 @@ WHEN NOT MATCHED THEN
 * **Data Skipping:** Delta Lake automatically stores **Min/Max statistics** for every column in every file. If your query looks for `id = 50` and a file's range is `100-200`, Spark skips that file entirely.
 * **Z-Ordering:** A technique to co-locate related data. It sorts data by multiple columns so that similar data points sit in the same files.
     * **Command:** `OPTIMIZE table_name ZORDER BY (col1, col2)`
-    * **Result:** dramatically improves Data Skipping.
+    * **Result:** Dramatically improves Data Skipping.
+
+
 
 ### **3. Compaction (Small File Problem)**
 * **The Problem:** In Big Data, opening 1,000 tiny files (1KB each) is much slower than opening 1 large file (1GB).
@@ -179,55 +183,60 @@ WHEN NOT MATCHED THEN
 
 ---
 
-## 🕰️ 10. Delta Lake Architecture & Time Travel
-**Concept:** How Databricks tracks changes (`_delta_log`) and allows you to query history or rollback.
+## 🕰️ 10. Deep Dive: Delta Lake Internals (Video 16)
+**Concept:** How Databricks achieves ACID properties, Time Travel, and Scalability using the `_delta_log`.
 
-### **The Transaction Log (`_delta_log`)**
-Every Delta Table has a hidden folder named `_delta_log` at the root.
-* **The Source of Truth:** It contains JSON files (commits).
-* **How it works:** Every INSERT, UPDATE, or DELETE creates a new JSON file (e.g., `00001.json`) that says "Add File A, Remove File B".
-* **ACID Compliance:** If the JSON file isn't fully written, the transaction doesn't happen. This prevents half-written data.
+### **1. The Transaction Log (`_delta_log`)**
+The "Brain" of the Delta Table. It is a folder stored at the root of your table directory.
+* **JSON Files (Commits):** Every single action (Insert, Merge, Delete) creates a specific JSON file (e.g., `000000.json`, `000001.json`). These record **Metadata**, not data.
+* **Checkpoint Files (.parquet):** Every **10 Commits**, Databricks creates a summary file. Spark reads this instead of processing thousands of tiny JSONs.
 
-### **Time Travel (Version History)**
-Because Delta Lake keeps the "Removed" files (for a default of 7 days) and the Log history, you can query the table as it existed in the past.
 
-**Use Cases:**
-1.  **Auditing:** Checking data state before a bad update.
-2.  **Reproduction:** Re-running a report with last month's data.
 
-**Commands:**
+### **2. The "Add/Remove" Protocol (ACID)**
+Delta Lake files are **Immutable**. When you update a row:
+1.  Delta reads the original file (File A).
+2.  It writes a **New File** (File B) with the change.
+3.  It records in the Log: `remove(File A)` and `add(File B)`.
+* **Result:** File A still exists physically (allowing Time Travel), but the "Current Version" ignores it.
+
+### **3. Deletion Vectors (Optimization)**
+**Concept:** A feature to speed up Updates/Deletes on large files.
+* **The Old Way (Copy-on-Write):** If you change 1 row in a 1GB file, Delta must rewrite the entire 1GB file. This is slow ("Write Amplification").
+* **The New Way (Deletion Vectors):**
+    * Delta creates a tiny **Bitmap File** linked to the original file.
+    * This bitmap simply marks specific rows as "Deleted".
+    * **Benefit:** Instant writes because no massive data copy happens. The file is only rewritten later during `OPTIMIZE`.
+
+
+
+### **4. Time Travel & Restore**
+Query past versions using the log history.
 
 ```sql
--- 1. View all versions/history
-DESCRIBE HISTORY employee_table;
+-- Query History
+SELECT * FROM my_table VERSION AS OF 5;
 
--- 2. Query by Version Number
-SELECT * FROM employee_table VERSION AS OF 3;
-
--- 3. Query by Timestamp
-SELECT * FROM employee_table TIMESTAMP AS OF '2023-10-25 14:30:00';
+-- Restore (Undo Mistake)
+RESTORE TABLE my_table TO VERSION AS OF 3;
 ```
+---
+### **5. Maintenance: VACUUM**
+Databricks keeps old/deleted files physically in storage to enable Time Travel. To save costs, you must remove them eventually.
 
-#### ** Deletion Vectors (Optimization Feature)**
-**Concept:** A performance feature that speeds up `UPDATE` and `DELETE` operations on large files.
+* **Concept:** Permanently deletes files that are no longer in the latest state of the table and are older than the retention period.
+* **Command:** `VACUUM table_name [RETAIN num HOURS]`
+* **Default Retention:** 7 Days (168 Hours).
+* **Safety Check:** Databricks prevents you from setting retention < 168 hours to prevent accidental data loss. You must disable this check to vacuum aggressively.
 
-* **The Problem (Copy-on-Write):**
-    * In standard Delta Lake, if you modify **one single row** in a 1GB Parquet file, Databricks must read the whole file, remove the row, and rewrite a **new 1GB file**.
-    * This is called "Write Amplification." It is slow and wastes I/O.
+> **⚠️ CRITICAL WARNING:** Once you run VACUUM, the physical files are gone forever. You **cannot** Time Travel back to versions older than the retention limit.
 
-* **The Solution (Deletion Vectors / Merge-on-Read):**
-    * Instead of rewriting the whole file, Databricks creates a tiny auxiliary file (a **Bitmap**) linked to the original file.
-    * This bitmap simply says: *"Rows 5, 10, and 500 are deleted."*
-    * **Write Speed:** Instant (because we aren't moving 1GB of data).
-    * **Read Speed:** Slight overhead (Spark has to check the bitmap while reading), but generally faster than waiting for a full rewrite.
+```sql
+-- Standard cleanup (Safe - Defaults to 7 days)
+VACUUM employee_table;
 
-
-
-* **Maintenance:**
-    * The file remains "fragmented" (Original Data + Deletion Vector) until you run `OPTIMIZE` or `VACUUM`.
-    * During Optimization, Databricks finally rewrites the file cleanly, permanently removing the deleted rows and deleting the vector file.
-
-* **Enabling it:**
-    ```sql
-    ALTER TABLE my_table SET TBLPROPERTIES ('delta.enableDeletionVectors' = true);
-    ```
+-- Aggressive cleanup (Removes ALL history instantly)
+-- 1. Turn off the safety check
+SET spark.databricks.delta.retentionDurationCheck.enabled = false;
+-- 2. Run Vacuum with 0 hours retention
+VACUUM employee_table RETAIN 0 HOURS;
