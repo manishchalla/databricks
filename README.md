@@ -724,5 +724,107 @@ print(f"🎲 Generated Value: {val}")
 #     print("⚠️ Low Value. Skipping.")
 ```
 ---
+---
+
+## 📥 18. Data Ingestion: COPY INTO & Idempotency
+**Concept:** The standard SQL command to load data from files (S3/ADLS) into a Delta Table. It is designed to be **Idempotent** (safe to re-run).
+
+### **1. What is `COPY INTO`?**
+* **Definition:** A SQL command that loads data from a file location into a Delta table.
+* **The Magic:** It keeps track of which files it has already loaded.
+* **Use Case:** Batch ingestion (e.g., "Load all new files that arrived today").
+* **Best For:** Small to Medium workloads (Thousands of files). For Millions of files, use **Auto Loader** (discussed later).
+
+### **2. The "Metadata" Strategy (How it works)**
+`COPY INTO` maintains a **File State** (Metadata) in the target Delta table's transaction log.
+1.  **Scan:** It looks at the Source folder (e.g., S3 Bucket).
+2.  **Check:** It compares the files in the source against its internal log of "already loaded files."
+3.  **Filter:** It ignores any file that matches an entry in the log.
+4.  **Ingest:** It only reads and commits the **New Files**.
+
+### **3. Idempotency & Exactly-Once Processing**
+**Concept:** "Idempotent" means you can run the same command 1,000 times, and the result is exactly the same as running it once.
+
+* **Scenario:**
+    * **Run 1:** You have `file_A.csv`. You run `COPY INTO`.
+        * *Result:* `file_A` is loaded. Table count: 100 rows.
+    * **Run 2:** You run `COPY INTO` again immediately.
+        * *Result:* Databricks sees `file_A` is already in the metadata. It does **nothing**. Table count: 100 rows. (No Duplicates!).
+    * **Run 3:** You add `file_B.csv` and run `COPY INTO`.
+        * *Result:* It skips `file_A`, loads `file_B`. Table count: 200 rows.
+
+**This guarantees "Exactly-Once Processing"**: Data is processed once and only once, even if the pipeline crashes and restarts.
+
+
+
+### **4. Syntax**
+```sql
+COPY INTO target_table
+FROM 's3://my-bucket/data-folder'
+FILEFORMAT = CSV
+FORMAT_OPTIONS ('header' = 'true', 'inferSchema' = 'true')
+COPY_OPTIONS ('mergeSchema' = 'true'); -- Auto-evolve schema if new columns appear
+```
+
+---
+
+### **Hands-On Practice: Idempotency Test**
+
+**Step 1: Create a Dummy Source File**
+*We will create a file in DBFS to act as our "S3 Bucket".*
+```python
+# Create a folder and a file
+dbutils.fs.mkdirs("/tmp/copy_into_demo")
+dbutils.fs.put("/tmp/copy_into_demo/file1.csv", "id,name\n1,Manish\n2,Rahul", True)
+```
+
+**Step 2: Create a Target Table**
+```sql
+CREATE TABLE IF NOT EXISTS my_ingest_table (
+    id INT,
+    name STRING
+);
+```
+
+**Step 3: Run COPY INTO (First Load)**
+```sql
+COPY INTO my_ingest_table
+FROM '/tmp/copy_into_demo'
+FILEFORMAT = CSV
+FORMAT_OPTIONS ('header' = 'true');
+
+-- Check count. Should be 2.
+SELECT count(*) FROM my_ingest_table;
+```
+
+**Step 4: The Idempotency Test (Run it again!)**
+*Run the EXACT same command from Step 3 again.*
+```sql
+COPY INTO my_ingest_table
+FROM '/tmp/copy_into_demo'
+FILEFORMAT = CSV
+FORMAT_OPTIONS ('header' = 'true');
+
+-- Check count. Should STILL be 2. 
+-- It detected that file1.csv was already loaded and skipped it.
+SELECT count(*) FROM my_ingest_table;
+```
+
+**Step 5: Add New Data**
+```python
+# Add a new file
+dbutils.fs.put("/tmp/copy_into_demo/file2.csv", "id,name\n3,Priya", True)
+```
+
+**Step 6: Run COPY INTO (Incremental Load)**
+*Run the command from Step 3 one more time.*
+```sql
+-- It will now skip file1.csv and ONLY load file2.csv
+COPY INTO my_ingest_table ... 
+
+-- Check count. Should be 3.
+SELECT * FROM my_ingest_table;
+```
+---
 
 
