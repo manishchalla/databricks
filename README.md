@@ -524,5 +524,98 @@ print(f"Rows Processed: {parsed_result['row_count']}")
 ```
 ---
 
+---
+
+## 🖥️ 15. Databricks Compute Architecture & Security (Video 20)
+**Concept:** Understanding the different "Engines" (Clusters) that process your data, how to secure them using Access Modes, and how to control costs with Policies.
+
+### **1. Compute Types (The "Workhorses")**
+Choosing the wrong compute type can cost you **3x more money**.
+
+| Feature | **All-Purpose Compute** (Interactive) | **Job Compute** (Automated) |
+| :--- | :--- | :--- |
+| **Purpose** | Development, Ad-hoc analysis, Building Notebooks. | Running scheduled Production workflows (ETL). |
+| **Lifecycle** | **Long-Running.** Stays up until you manually terminate it (or auto-termination kicks in). | **Ephemeral.** Starts when the job begins, dies immediately after. |
+| **Cost** | **Expensive ($$$).** You pay a premium for interactivity. | **Cheap ($).** Heavily discounted (approx. 60% cheaper). |
+| **Sharing** | Shared by many developers (e.g., "Team_Shared_Cluster"). | Dedicated to that specific job run. Isolated. |
+| **Best For** | Coding, Debugging, BI Dashboards. | Nightly Batch Jobs, Streaming Pipelines. |
+
+
+
+### **2. Access Modes (Crucial for Unity Catalog)**
+**Concept:** This setting defines *who* can use the cluster and *what* data security rules apply.
+
+| Access Mode | **Single User** | **Shared** (Standard) | **No Isolation** (Legacy) |
+| :--- | :--- | :--- | :--- |
+| **Target User** | **One person only.** | **Multiple users.** | **Everyone.** |
+| **Unity Catalog?** | **YES.** (Full Support) | **YES.** (Full Support) | **NO.** (Legacy Hive only) |
+| **Languages** | Python, SQL, Scala, R. | Python, SQL. (**No Scala/R**). | All Languages. |
+| **Isolation** | User is isolated. | Process isolation (Secure). | None (Shared Java VM). |
+| **Use Case** | Data Scientists needing R or custom libraries. | Data Engineering Teams, BI Analysts. | Legacy jobs, non-UC data. |
+
+
+
+### **3. Cluster Policies (Governance & Cost Control)**
+**Concept:** A set of rules (JSON) that restrict what users can configure.
+* **Why?** Prevents a Junior Engineer from accidentally spinning up a **$500/hour** GPU cluster.
+
+**Common Rules:**
+1.  **Limit Size:** "Max Workers = 4".
+2.  **Enforce Type:** "Must use `i3.xlarge` (Spot Instances)".
+3.  **Auto-Termination:** "Must terminate after 30 mins".
+
+**Example Policy (JSON):**
+```json
+{
+  "spark_version": { "type": "fixed", "value": "13.3.x-scala2.12" },
+  "autotermination_minutes": { "type": "range", "minValue": 10, "maxValue": 60 },
+  "node_type_id": { "type": "allowlist", "values": ["Standard_DS3_v2", "Standard_DS4_v2"] }
+}
+```
+
+### **4. Cluster Permissions (ACLs)**
+**Concept:** Controlling *who* can touch the cluster itself.
+
+| Permission | Capability | Typical Role |
+| :--- | :--- | :--- |
+| **Can Attach To** | Can connect their notebook to the cluster and run code. | Developers / Analysts |
+| **Can Restart** | Can reboot the cluster (clearing cache) but not change size. | Senior Developers / Leads |
+| **Can Manage** | Can edit config, resize, change policy, or delete. | Admins / DevOps |
+
+
+
+---
+
+### **5. Real-World Scenario: The "Thinking Process"**
+**Situation:** You are a Senior Data Engineer at "ShopSmart". You need to create a cluster for your team of 5 engineers to process sensitive customer data.
+
+**The Analysis Checklist:**
+
+1.  **Question:** "Is this for just me, or the whole team?"
+    * *Answer:* Whole team (5 people).
+    * *Decision:* **Cannot use Single User.** Must be a multi-user cluster.
+
+2.  **Question:** "Do we need Unity Catalog (Security)?"
+    * *Answer:* Yes, we have PII data.
+    * *Decision:* **Must use Shared Mode.** (No Isolation would expose all data).
+
+3.  **Question:** "What languages are we using?"
+    * *Answer:* Python and SQL.
+    * *Check:* Shared Mode supports these. (If we needed Scala, we'd have a problem).
+
+4.  **Question:** "How do I prevent over-spending?"
+    * *Answer:* This is for dev work.
+    * *Decision:* Set **Auto-Termination** to 30 mins. Use a **Cluster Policy** that restricts max workers to 4.
+
+**The Final Configuration:**
+* **Name:** `data-eng-team-shared-dev`
+* **Access Mode:** **Shared**
+* **Policy:** `General_Dev_Policy`
+* **Runtime:** `13.3 LTS`
+* **Worker Type:** `Standard_D4s_v5` (Small/Cheap)
+* **Permissions:** Group `data-engineers` gets **Can Attach To**.
+
+---
+
 
 
