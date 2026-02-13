@@ -257,3 +257,61 @@ VACUUM employee_table;
 SET spark.databricks.delta.retentionDurationCheck.enabled = false;
 -- 2. Run Vacuum with 0 hours retention
 VACUUM employee_table RETAIN 0 HOURS;
+
+```
+---
+
+## 📦 12. Unity Catalog: Tables & Volumes
+**Concept:** How Unity Catalog manages Structured Data (Tables) vs. Unstructured Data (Volumes).
+
+### **1. Managed vs. External Tables (Recap for UC)**
+In Unity Catalog, the distinction determines **who deletes the data**.
+
+* **Managed Table:**
+    * **Data Location:** Stored in the root storage of the Metastore or Catalog.
+    * **Creation:** `CREATE TABLE my_table ...` (No path needed).
+    * **Deletion:** `DROP TABLE` deletes **Metadata AND Data**.
+* **External Table:**
+    * **Data Location:** Stored in your specific Cloud Storage path (ADLS/S3).
+    * **Creation:** `CREATE TABLE my_table ... LOCATION 's3://...'`
+    * **Deletion:** `DROP TABLE` deletes **Metadata ONLY**. Data remains safe.
+
+### **2. Volumes (New Feature)**
+**Concept:** A Unity Catalog object used to manage **Non-Tabular Data** (PDFs, Images, CSVs, JSONs, ML Models).
+
+* **Why use Volumes?**
+    * Tables are for rows and columns.
+    * Volumes are for files. They replace the old "Mount Points" (`/dbfs/mnt/...`).
+* **Path Structure:**
+    * Access files just like a local folder:
+    * `/Volumes/<catalog_name>/<schema_name>/<volume_name>/file.csv`
+
+### **3. Managed vs. External Volumes**
+Just like tables, Volumes come in two flavors:
+
+* **Managed Volume:**
+    * Created in the default storage location of the Schema.
+    * Good for: Temporary files, scratchpad data.
+* **External Volume:**
+    * Points to a specific URL in your Cloud Storage (e.g., `s3://my-bucket/raw-data`).
+    * Good for: Landing zones where raw data arrives from outside.
+
+
+
+### **4. Commands**
+```sql
+-- Create a Volume
+CREATE VOLUME my_volume;
+
+-- Upload a file (UI or CLI)
+-- Then read it directly:
+SELECT * FROM csv.`/Volumes/prod/sales/my_volume/data.csv`;
+
+-- List files in a Volume
+LIST '/Volumes/prod/sales/my_volume/';
+
+
+
+---
+
+
