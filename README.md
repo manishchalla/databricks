@@ -617,5 +617,112 @@ Choosing the wrong compute type can cost you **3x more money**.
 
 ---
 
+---
+
+## 🎻 17. Advanced Workflows: Logic, Loops & Values
+**Concept:** Moving beyond simple linear jobs (A -> B -> C) to complex, logic-driven pipelines (A -> If True -> B -> Loop C).
+
+### **1. The Hierarchy: Job vs. Run vs. Task**
+* **Job:** The definition or "blueprint" of the workflow (e.g., "Daily Sales ETL"). It contains the schedule and permissions.
+* **Job Run:** A specific instance of that job executing (e.g., "The Jan 1st Run").
+* **Task:** A single step within the job.
+    * **Types:** Notebook, Python Script, SQL Query, JAR, Delta Live Tables, dbt.
+    * **Dependency:** You link tasks together to create a **DAG** (Directed Acyclic Graph). Task B waits for Task A to finish.
+
+
+
+### **2. Passing Values Between Tasks (`taskValues`)**
+**Concept:** You calculate a value in **Task A** (e.g., `row_count = 500`) and you need to use it in **Task B** (e.g., `if row_count > 0`).
+* **Old Way:** Save to a file on disk (S3/ADLS) in Task A, read the file in Task B. Slow and messy.
+* **New Way:** Use `dbutils.jobs.taskValues`. It passes variables in memory between tasks securely.
+
+#### **Syntax:**
+**Task A (The Setter):**
+```python
+# Calculate a value
+records_processed = 1500
+
+# Set the value with a Key ("row_count")
+# dbutils.jobs.taskValues.set(key = "row_count", value = records_processed)
+```
+
+**Task B (The Getter):**
+```python
+# Get the value from Task A
+# usage: get(taskKey, key, default, debugValue)
+# count = dbutils.jobs.taskValues.get(taskKey = "Task_A", key = "row_count", default = 0)
+
+# print(f"Received count from Task A: {count}")
+```
+
+### **3. Control Flow: If/Else Condition Task**
+**Concept:** A specific **Task Type** in the Workflows UI that branches execution based on a condition. You don't need a notebook for this logic anymore.
+
+* **How it works:**
+    1.  Create a task and select Type: **If/Else Condition**.
+    2.  **Condition:** Check a `taskValue` from a previous task.
+        * *Example:* `{{tasks.Task_A.values.row_count}} > 0`
+    3.  **True Path:** Add tasks that run if the condition is met (e.g., "Send_Email").
+    4.  **False Path:** Add tasks that run if it fails (e.g., "Skip_Processing").
+
+
+
+### **4. Control Flow: For Each Loop Task**
+**Concept:** A **Task Type** that runs a nested task multiple times in parallel over a list of items.
+
+* **Use Case:** You have a list of 50 tables to ingest. Instead of creating 50 separate tasks, you create **one** loop.
+* **Input:** A JSON array (e.g., `["table1", "table2", "table3"]`) passed from a previous task or defined manually.
+* **Concurrency:** You can set how many loops run at the same time (e.g., "Run 5 tables in parallel").
+
+
+
+### **5. Repair and Re-Run**
+**Concept:** When a job fails halfway through, you don't want to restart from the beginning (Task A). You want to fix the error and resume from where it broke.
+
+* **Repair Run:**
+    * Identify the failed task (e.g., Task C).
+    * Fix the code in Task C.
+    * Click **"Repair Run"** in the UI.
+    * Databricks skips Task A and B (since they succeeded) and restarts **only** Task C and its downstream dependents.
+* **Matrix Re-run:** If a "For Each" loop fails on just 1 out of 50 tables, a Repair Run will only retry that **1 failed iteration**.
+
+---
+
+### **Hands-On Practice: Task Values**
+
+**Scenario:** Task 1 generates a random number. Task 2 prints it.
+
+**Step 1: Create Notebook "Generate_Data" (Task 1)**
+```python
+import random
+
+# 1. Generate a random value
+val = random.randint(1, 100)
+print(f"🎲 Generated Value: {val}")
+
+# 2. Pass it to the Job context
+# dbutils.jobs.taskValues.set(key = "my_random_number", value = val)
+```
+
+**Step 2: Create Notebook "Process_Data" (Task 2)**
+```python
+# 1. Get value from previous task (Use the exact Task Name you set in the UI)
+# Note: 'debugValue' is what is returned when running interactively (not in a job)
+# received_val = dbutils.jobs.taskValues.get(
+#     taskKey = "Generate_Data", 
+#     key = "my_random_number", 
+#     default = 0, 
+#     debugValue = 99
+# )
+
+# print(f"📥 Received Value: {received_val}")
+
+# 2. Logic
+# if int(received_val) > 50:
+#     print("✅ High Value! Processing...")
+# else:
+#     print("⚠️ Low Value. Skipping.")
+```
+---
 
 
