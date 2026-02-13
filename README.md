@@ -153,3 +153,56 @@ WHEN MATCHED AND target.value <> source.value THEN
 WHEN NOT MATCHED THEN
   INSERT (id, value, is_active) VALUES (source.id, source.value, true);
 ```
+
+
+---
+
+## 🚀 9. Optimization Essentials (Video 16 Prerequisites)
+**Concept:** Before understanding Delta Lake internals, you must understand how Spark reads data efficiently.
+
+### **1. Partitioning (The "Folder" Strategy)**
+* **What is it?** Breaking a large table into sub-folders based on a column (e.g., `year=2023/month=01`).
+* **Benefit:** **Partition Pruning**. If you query `WHERE year = 2023`, Spark reads *only* that folder and ignores the rest.
+* **Best Practice:** Only partition columns frequently used in filters and with low cardinality (e.g., Date, Country). Do **not** partition by unique IDs.
+
+### **2. Data Skipping & Z-Ordering**
+* **Data Skipping:** Delta Lake automatically stores **Min/Max statistics** for every column in every file. If your query looks for `id = 50` and a file's range is `100-200`, Spark skips that file entirely.
+* **Z-Ordering:** A technique to co-locate related data. It sorts data by multiple columns so that similar data points sit in the same files.
+    * **Command:** `OPTIMIZE table_name ZORDER BY (col1, col2)`
+    * **Result:** dramatically improves Data Skipping.
+
+### **3. Compaction (Small File Problem)**
+* **The Problem:** In Big Data, opening 1,000 tiny files (1KB each) is much slower than opening 1 large file (1GB).
+* **The Solution:** The `OPTIMIZE` command (Bin-packing).
+* **Command:** `OPTIMIZE table_name`
+    * This merges small files into larger, efficient files without stopping reads/writes.
+
+---
+
+## 🕰️ 10. Delta Lake Architecture & Time Travel (Video 16)
+**Concept:** How Databricks tracks changes (`_delta_log`) and allows you to query history or rollback.
+
+### **The Transaction Log (`_delta_log`)**
+Every Delta Table has a hidden folder named `_delta_log` at the root.
+* **The Source of Truth:** It contains JSON files (commits).
+* **How it works:** Every INSERT, UPDATE, or DELETE creates a new JSON file (e.g., `00001.json`) that says "Add File A, Remove File B".
+* **ACID Compliance:** If the JSON file isn't fully written, the transaction doesn't happen. This prevents half-written data.
+
+### **Time Travel (Version History)**
+Because Delta Lake keeps the "Removed" files (for a default of 7 days) and the Log history, you can query the table as it existed in the past.
+
+**Use Cases:**
+1.  **Auditing:** Checking data state before a bad update.
+2.  **Reproduction:** Re-running a report with last month's data.
+
+**Commands:**
+
+```sql
+-- 1. View all versions/history
+DESCRIBE HISTORY employee_table;
+
+-- 2. Query by Version Number
+SELECT * FROM employee_table VERSION AS OF 3;
+
+-- 3. Query by Timestamp
+SELECT * FROM employee_table TIMESTAMP AS OF '2023-10-25 14:30:00';
