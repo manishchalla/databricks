@@ -220,7 +220,7 @@ SELECT * FROM my_table VERSION AS OF 5;
 -- Restore (Undo Mistake)
 RESTORE TABLE my_table TO VERSION AS OF 3;
 ```
----
+
 ### **5. Maintenance: VACUUM**
 Databricks keeps old/deleted files physically in storage to enable Time Travel. To save costs, you must remove them eventually.
 
