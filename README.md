@@ -206,7 +206,7 @@ SELECT * FROM employee_table VERSION AS OF 3;
 
 -- 3. Query by Timestamp
 SELECT * FROM employee_table TIMESTAMP AS OF '2023-10-25 14:30:00';
-
+```
 
 **Concept:** A performance feature that speeds up `UPDATE` and `DELETE` operations on large files.
 
