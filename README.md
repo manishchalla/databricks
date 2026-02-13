@@ -206,3 +206,27 @@ SELECT * FROM employee_table VERSION AS OF 3;
 
 -- 3. Query by Timestamp
 SELECT * FROM employee_table TIMESTAMP AS OF '2023-10-25 14:30:00';
+
+
+**Concept:** A performance feature that speeds up `UPDATE` and `DELETE` operations on large files.
+
+* **The Problem (Copy-on-Write):**
+    * In standard Delta Lake, if you modify **one single row** in a 1GB Parquet file, Databricks must read the whole file, remove the row, and rewrite a **new 1GB file**.
+    * This is called "Write Amplification." It is slow and wastes I/O.
+
+* **The Solution (Deletion Vectors / Merge-on-Read):**
+    * Instead of rewriting the whole file, Databricks creates a tiny auxiliary file (a **Bitmap**) linked to the original file.
+    * This bitmap simply says: *"Rows 5, 10, and 500 are deleted."*
+    * **Write Speed:** Instant (because we aren't moving 1GB of data).
+    * **Read Speed:** Slight overhead (Spark has to check the bitmap while reading), but generally faster than waiting for a full rewrite.
+
+
+
+* **Maintenance:**
+    * The file remains "fragmented" (Original Data + Deletion Vector) until you run `OPTIMIZE` or `VACUUM`.
+    * During Optimization, Databricks finally rewrites the file cleanly, permanently removing the deleted rows and deleting the vector file.
+
+* **Enabling it:**
+    ```sql
+    ALTER TABLE my_table SET TBLPROPERTIES ('delta.enableDeletionVectors' = true);
+    ```
