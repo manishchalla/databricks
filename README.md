@@ -208,6 +208,7 @@ SELECT * FROM employee_table VERSION AS OF 3;
 SELECT * FROM employee_table TIMESTAMP AS OF '2023-10-25 14:30:00';
 ```
 
+#### ** Deletion Vectors (Optimization Feature)**
 **Concept:** A performance feature that speeds up `UPDATE` and `DELETE` operations on large files.
 
 * **The Problem (Copy-on-Write):**
