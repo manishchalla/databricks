@@ -419,5 +419,110 @@ print(f"File path defined: {file_path}")
 ```
 ---
 
+---
+
+## 🎻 14. Orchestration: Jobs & Notebook Chaining
+**Concept:** Moving from manual "Run All" to automated, scheduled pipelines where notebooks trigger each other.
+
+### **1. Notebook Chaining (`dbutils.notebook.run`)**
+**Concept:** You can call a "Child" notebook from a "Parent" notebook, pass arguments to it, and get a result back.
+* **Why use it?** To modularize code (e.g., `Ingest_Notebook` -> `Process_Notebook` -> `Reporting_Notebook`).
+* **Scope:** The child notebook runs in a **separate job** (ephemeral scope), so variables are *not* shared automatically. You must pass them explicitly.
+
+#### **Command Syntax**
+```python
+# Parent Notebook calling Child
+result = dbutils.notebook.run(
+    "path/to/child_notebook",  # Path
+    600,                       # Timeout in seconds
+    {"input_param": "Value"}   # Arguments (Dictionary)
+)
+```
+
+#### **Returning Values (`dbutils.notebook.exit`)**
+* The child notebook can send a string back to the parent.
+* *Tip:* To return complex data (like a list or dictionary), wrap it in JSON.
+
+```python
+# Child Notebook finishing
+import json
+dbutils.notebook.exit(json.dumps({"status": "Success", "rows": 100}))
+```
+
+### **2. Scheduling Jobs (The "Jobs" Tab)**
+**Concept:** Turning a notebook into a production workflow.
+* **Task:** A single unit of work (e.g., Run Notebook A).
+* **Job:** A collection of tasks with dependencies (A -> B -> C).
+
+#### **Passing Parameters from Job to Notebook**
+When you schedule a Job, you can define **Parameters** in the Job UI.
+1.  **In Job UI:** Add Key=`env`, Value=`prod`.
+2.  **In Notebook:** Use `dbutils.widgets.get("env")` to read it.
+    * *Result:* The same notebook can run as "Dev" or "Prod" just by changing the Job Parameter.
+
+### **3. Retry & Timeout Policies**
+* **Retries:** If a cell fails (e.g., API glitch), the Job can auto-retry.
+* **Timeout:** If a job hangs for too long (e.g., > 2 hours), kill it to save money.
+
+---
+
+### **Hands-On Practice: Parent-Child Pipeline**
+
+To practice this, you need to create **two separate notebooks**.
+
+#### **Step 1: Create "Child_Worker" Notebook**
+*Create a new notebook named `Child_Worker` and paste this code:*
+
+```python
+# --- CHILD NOTEBOOK ---
+import json
+
+# 1. Accept Inputs
+dbutils.widgets.text("date_param", "2024-01-01")
+date = dbutils.widgets.get("date_param")
+
+print(f"👷 Child Worker processing data for: {date}")
+
+# 2. Simulate Work
+status = "Success"
+count = 500
+
+# 3. Return Result to Parent
+# We bundle the results into a JSON string
+result_json = json.dumps({
+    "processed_date": date,
+    "status": status,
+    "row_count": count
+})
+
+dbutils.notebook.exit(result_json)
+```
+
+#### **Step 2: Create "Parent_Orchestrator" Notebook**
+*Create a new notebook named `Parent_Orchestrator` and paste this code:*
+
+```python
+# --- PARENT NOTEBOOK ---
+import json
+
+print("🚀 Starting Pipeline...")
+
+# 1. Run the Child Notebook
+# We pass the 'date_param' dynamically
+raw_result = dbutils.notebook.run(
+    "./Child_Worker",   # Path to child (assuming same folder)
+    60,                 # Timeout (60 seconds)
+    {"date_param": "2025-12-31"} # Arguments
+)
+
+# 2. Process the Result
+parsed_result = json.loads(raw_result)
+
+print(f"✅ Pipeline Finished.")
+print(f"Child Status: {parsed_result['status']}")
+print(f"Rows Processed: {parsed_result['row_count']}")
+```
+---
+
 
 
