@@ -157,7 +157,7 @@ WHEN NOT MATCHED THEN
 
 ---
 
-## 🚀 9. Optimization Essentials (Video 16 Prerequisites)
+## 🚀 9. Optimization Essentials 
 **Concept:** Before understanding Delta Lake internals, you must understand how Spark reads data efficiently.
 
 ### **1. Partitioning (The "Folder" Strategy)**
@@ -179,7 +179,7 @@ WHEN NOT MATCHED THEN
 
 ---
 
-## 🕰️ 10. Delta Lake Architecture & Time Travel (Video 16)
+## 🕰️ 10. Delta Lake Architecture & Time Travel
 **Concept:** How Databricks tracks changes (`_delta_log`) and allows you to query history or rollback.
 
 ### **The Transaction Log (`_delta_log`)**
