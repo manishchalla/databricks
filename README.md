@@ -826,5 +826,326 @@ COPY INTO my_ingest_table ...
 SELECT * FROM my_ingest_table;
 ```
 ---
+---
 
+## ⚡ 19. Auto Loader (`cloudFiles`)
+**Concept:** A highly efficient way to incrementally ingest new data files as they arrive in cloud storage (S3/ADLS/GCS). Unlike `COPY INTO`, it is built on **Structured Streaming**, allowing for real-time processing and automatic schema handling.
+
+### **1. Why Auto Loader?**
+* **Scalability:** Can handle **billions** of files. `COPY INTO` struggles after a few thousand.
+* **State Management:** Automatically remembers which files have been processed using RocksDB (checkpointing).
+* **Schema Evolution:** Can adapt if the source data adds new columns (e.g., a JSON file suddenly has a "Phone_Number" field).
+* **Rescued Data:** It never fails on bad data; it just quarantines it.
+
+### **2. Syntax: The `cloudFiles` Format**
+You use the standard `readStream` API but specify the format as `cloudFiles`.
+
+```python
+df = (spark.readStream
+      .format("cloudFiles") 
+      .option("cloudFiles.format", "csv") 
+      .option("cloudFiles.schemaLocation", "/mnt/schema_checkpoints") 
+      .load("/mnt/raw_data")
+)
+```
+
+### **3. File Detection Modes**
+How does Auto Loader know a new file arrived? It has two strategies.
+
+| Mode | **Directory Listing** (Default) | **File Notification** (Event Driven) |
+| :--- | :--- | :--- |
+| **How it works** | Periodically scans the input folder (like `ls -R`) to find new files. | Listens to Cloud Events (AWS SQS, Azure Event Grid). When a file lands, the Cloud tells Databricks. |
+| **Best For** | **Low Volume.** (< 50,000 files). Simple setup. | **High Volume.** (Millions of files). No scanning overhead. |
+| **Cost** | Cheaper for small folders. Expensive for huge folders (too many list API calls). | Cheaper for huge folders (you pay per event). |
+| **Setup** | Zero setup. Just point to the folder. | Requires permissions to create Queues/Topics in the cloud account. |
+
+
+
+To enable Notification mode:
+```python
+# .option("cloudFiles.useNotifications", "true")
+```
+
+### **4. Schema Evolution Modes**
+What happens if your source data changes (e.g., a new column `user_age` appears)?
+
+| Mode | Description | Behavior |
+| :--- | :--- | :--- |
+| **addNewColumns** (Default) | **Automatic.** If a new column appears, the stream updates the schema and continues. | The new column is added to the table. History is preserved. |
+| **failOnNewColumns** | **Strict.** Stops the stream if it sees something new. | Use this if you need manual approval for changes. |
+| **rescue** | **Safe.** Ignores the new column in the main schema but saves it in `_rescued_data`. | Good for keeping the main table clean but not losing data. |
+| **none** | **Ignorant.** Ignores new columns completely. | Data in new columns is lost. |
+
+
+
+### **5. The "Rescued Data" Column (`_rescued_data`)**
+**Concept:** A safety net. If Auto Loader finds data it **cannot parse** (e.g., "Five" in an Integer column) or **unexpected columns**, it dumps that row into a special JSON column called `_rescued_data`.
+* **Result:** The stream **NEVER CRASHES**. You can audit the rescued column later to fix data quality issues.
+
+---
+
+### **Hands-On Practice Code**
+
+**Scenario:** We will simulate a stream of CSV files. We will start with 2 columns, then add a 3rd column to see Schema Evolution in action.
+
+```python
+# --- STEP 1: SETUP ---
+source_path = "/tmp/autoloader/source"
+checkpoint_path = "/tmp/autoloader/checkpoint"
+schema_path = "/tmp/autoloader/schema"
+
+# Clean up previous runs
+# dbutils.fs.rm(source_path, True)
+# dbutils.fs.rm(checkpoint_path, True)
+# dbutils.fs.rm(schema_path, True)
+
+# Create initial data (2 columns)
+# dbutils.fs.put(f"{source_path}/file1.csv", "id,name\n1,Manish", True)
+
+# --- STEP 2: DEFINE AUTO LOADER STREAM ---
+# We use .trigger(availableNow=True) to treat it like a batch job for this demo
+# df = (spark.readStream
+#       .format("cloudFiles")
+#       .option("cloudFiles.format", "csv")
+#       .option("cloudFiles.schemaLocation", schema_path) # Required for evolution
+#       .option("cloudFiles.schemaEvolutionMode", "addNewColumns") # Enable evolution
+#       .load(source_path))
+
+# Write to a table
+# query = (df.writeStream
+#          .format("delta")
+#          .option("checkpointLocation", checkpoint_path)
+#          .option("mergeSchema", "true") # Allow Delta table to accept new columns
+#          .trigger(availableNow=True)
+#          .table("autoloader_demo"))
+
+# query.awaitTermination()
+
+# Check: Should have id, name
+# print("--- Round 1 ---")
+# display(spark.sql("SELECT * FROM autoloader_demo"))
+
+# --- STEP 3: EVOLVE SCHEMA ---
+# Add a file with a NEW column "age"
+# dbutils.fs.put(f"{source_path}/file2.csv", "id,name,age\n2,Rahul,30", True)
+
+# Run the EXACT same stream code again
+# query_2 = (df.writeStream
+#          .format("delta")
+#          .option("checkpointLocation", checkpoint_path)
+#          .option("mergeSchema", "true")
+#          .trigger(availableNow=True)
+#          .table("autoloader_demo"))
+
+# query_2.awaitTermination()
+
+# Check: Should now have id, name, AND age
+# print("--- Round 2 (Schema Evolved) ---")
+# display(spark.sql("SELECT * FROM autoloader_demo"))
+```
+---
+---
+
+## 🏅 20. Medallion Architecture (Bronze, Silver, Gold)
+**Concept:** A design pattern that organizes data quality into three distinct layers. Data flows from "Raw" to "Business Ready," improving in quality and structure at each step.
+
+
+
+### **1. The Three Layers**
+
+#### **🟤 Bronze Layer (Raw Ingestion)**
+* **Purpose:** The "Landing Zone". To ingest data from external sources (APIs, SQL, CSVs) as quickly and faithfully as possible.
+* **Data State:** **Raw & Unchanged.** If the source sends bad data, the Bronze layer stores bad data.
+* **Structure:** Often matches the source system schema exactly.
+* **Operation:** **Append-Only.** We rarely update/delete here; we just keep adding history.
+* **Why?** If you make a mistake in your cleaning logic later, you can always "replay" the data from Bronze without asking the source system again.
+
+#### **⚪ Silver Layer (Cleaned / Enterprise View)**
+* **Purpose:** To filter, clean, and augment the data. This is your "Source of Truth."
+* **Data State:** **Cleaned & Validated.**
+    * Duplicates removed.
+    * Dates formatted (e.g., "01-01-2024" -> "2024-01-01").
+    * Nulls handled.
+    * Lookups joined (e.g., replacing `Customer_ID` with `Customer_Name`).
+* **Structure:** Normalized tables optimized for querying.
+* **Why?** This layer serves Data Scientists and Analysts who need granular but clean data.
+
+#### **🟡 Gold Layer (Aggregated / Business Level)**
+* **Purpose:** To provide specific answers for Business Intelligence (PowerBI, Tableau).
+* **Data State:** **Aggregated & Highly Refined.**
+    * "Daily Sales by Region"
+    * "Monthly Churn Rate"
+* **Structure:** Star Schema (Fact & Dimension tables).
+* **Why?** Optimized for read performance. Dashboards load instantly because the heavy math (sums, counts) was already done here.
+
+---
+
+### **2. Why use this architecture?**
+1.  **Simple Lineage:** You can trace a number in a Dashboard (Gold) back to the Clean Record (Silver) and finally to the Raw File (Bronze).
+2.  **Re-usability:** The **Silver** layer can feed 10 different **Gold** tables (Sales, Inventory, Marketing) without re-ingesting the raw data 10 times.
+3.  **Performance:** BI tools don't have to crunch millions of raw rows; they just read the pre-calculated Gold tables.
+
+### **3. Real-World Scenario: The "Uber" Trip**
+
+| Layer | What the Data Looks Like | Who Uses It? |
+| :--- | :--- | :--- |
+| **Bronze** | JSON dump: `{"id": 101, "ts": 16788, "lat": 45.1, "lon": 12.2, "status": "dropoff"}` | Data Engineers (for debugging). |
+| **Silver** | Table: `Trip_ID`, `Driver_Name`, `Start_Time` (Timestamp), `Distance_Miles` (Calculated), `Cost` (Cleaned). | Data Scientists (Predicting ETA). |
+| **Gold** | Table: `City`, `Total_Revenue`, `Avg_Trip_Time`. | CEO / Dashboards (Weekly Reports). |
+
+---
+
+### **Hands-On Practice: Building the Layers**
+
+**Step 1: Bronze (Ingest Raw)**
+```python
+# Read raw CSVs from a landing folder
+# df_bronze = spark.read.csv("/mnt/landing/sales/*.csv", header=True)
+
+# Save as-is to Bronze Delta Table
+# df_bronze.write.format("delta").mode("append").saveAsTable("bronze_sales")
+```
+
+**Step 2: Silver (Clean & Enriched)**
+```python
+# Read from Bronze
+# df = spark.read.table("bronze_sales")
+
+# Logic: Remove nulls, convert currency, filter cancelled orders
+# from pyspark.sql.functions import col, sum
+
+# df_silver = (df
+#     .filter("order_status != 'CANCELLED'")
+#     .dropna(subset=["order_id"])
+#     .withColumn("amount", col("amount").cast("double"))
+# )
+
+# Save to Silver
+# df_silver.write.format("delta").mode("overwrite").saveAsTable("silver_sales")
+```
+
+**Step 3: Gold (Aggregated for Reporting)**
+```python
+# Read from Silver
+# df = spark.read.table("silver_sales")
+
+# Logic: Aggregate by Date and Region
+# df_gold = (df
+#     .groupBy("order_date", "region")
+#     .agg(sum("amount").alias("total_sales"))
+# )
+
+# Save to Gold
+# df_gold.write.format("delta").mode("overwrite").saveAsTable("gold_daily_sales")
+```
+---
+---
+
+## 🌊 21. Delta Live Tables (DLT): Part 1
+**Concept:** A framework that makes building ETL pipelines easier. Instead of writing code to manage dependencies ("Run A, then Run B"), you just define **what** data you want, and DLT automatically figures out the dependencies, data quality checks, and recovery logic.
+
+### **1. What are Delta Live Tables?**
+* **The Problem:** In standard notebooks, you have to manually orchestrate tasks, manage checkpoints, and handle retries.
+* **The Solution:** DLT is **"Declarative."** You write code that says: *"Create Table X from Table Y."*
+* **The Engine:** DLT parses your code, builds a DAG (Dependency Graph), and runs it. If Table Y updates, DLT knows to update Table X automatically.
+
+### **2. The Two Main Table Types**
+
+#### **A. Streaming Tables (The "Bronze" Layer)**
+* **Definition:** A table that processes data **incrementally** (row by row) as it arrives.
+* **Behavior:** **Append-Only.** It reads from a "streaming source" (like Auto Loader or Kafka) and adds new rows to the target.
+* **Best For:** Ingesting massive amounts of raw data (Bronze Layer) without reprocessing history.
+* **Keyword:** `readStream`.
+
+#### **B. Materialized Views (The "Silver/Gold" Layer)**
+* **Definition:** A table that represents the **current final state** of a query.
+* **Behavior:** **Recomputed.** It ensures the target table matches the result of the query. If the source data changes, the Materialized View updates to reflect those changes.
+* **Best For:**
+    * **Aggregations:** "Daily Sales Total" (Gold).
+    * **Updates:** cleaning data where rows might change (Silver).
+* **Keyword:** `read` (Static read).
+
+| Feature | **Streaming Table** | **Materialized View** |
+| :--- | :--- | :--- |
+| **Processing** | Incremental (New data only). | Recomputed (Matches current state). |
+| **Source** | Infinite/Growing (Auto Loader/Kafka). | Static/Bounded (Delta Tables). |
+| **Cost** | Low (Processes little data). | Higher (Can reprocess data). |
+| **Use Case** | Raw Data Ingestion (Bronze). | Aggregates, Joins, Cleaning (Gold). |
+
+
+
+### **3. How to Create a DLT Pipeline**
+Unlike standard notebooks, you **cannot** press "Run All" in a DLT notebook. You must deploy it.
+
+1.  **Write Code:** Create a notebook with DLT syntax (Python or SQL).
+2.  **Create Pipeline:** Go to **Workflows -> Delta Live Tables**.
+3.  **Configure:**
+    * **Source Code:** Point to your notebook.
+    * **Target:** Choose a database (Schema) to publish tables to.
+    * **Mode:** "Development" (keeps cluster alive) or "Production" (restarts cluster).
+4.  **Run:** Click **Start**. DLT will graph the dependencies and execute them.
+
+---
+
+### **Hands-On Practice: Python Syntax (`@dlt`)**
+
+**Note:** This code must be put in a notebook, but you **DO NOT** run the cells. You attach this notebook to a DLT Pipeline in the Workflows tab.
+
+```python
+import dlt
+from pyspark.sql.functions import *
+
+# --- 1. BRONZE: STREAMING TABLE (Incremental) ---
+# We use Auto Loader (cloudFiles) to ingest raw JSONs
+@dlt.table(
+    comment="Raw data from landing zone"
+)
+def bronze_orders():
+    return (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .load("/mnt/landing/orders/")
+    )
+
+# --- 2. SILVER: STREAMING TABLE (Cleaning) ---
+# We read from the Bronze DLT table defined above
+@dlt.table(
+    comment="Cleaned orders with valid amounts"
+)
+@dlt.expect("valid_amount", "amount > 0")  # Data Quality Check!
+def silver_orders():
+    return (
+        dlt.readStream("bronze_orders")
+        .select("order_id", "customer_id", "amount", "order_date")
+    )
+
+# --- 3. GOLD: MATERIALIZED VIEW (Aggregated) ---
+# We read from Silver to create a final report.
+# Notice we use dlt.read() (Static), NOT readStream.
+@dlt.table(
+    comment="Daily sales aggregations"
+)
+def gold_daily_sales():
+    return (
+        dlt.read("silver_orders")
+        .groupBy("order_date")
+        .agg(sum("amount").alias("total_sales"))
+    )
+```
+### ** Hands-On Practice: SQL Syntax** 
+```SQL
+-- 1. BRONZE (Streaming) 
+CREATE OR REFRESH STREAMING TABLE bronze_orders
+AS SELECT * FROM cloud_files("/mnt/landing/orders/", "json");
+
+-- 2. SILVER (Streaming with Constraints)
+CREATE OR REFRESH STREAMING TABLE silver_orders
+(CONSTRAINT valid_amount EXPECT (amount > 0))
+AS SELECT order_id, amount FROM STREAM(LIVE.bronze_orders);
+
+-- 3. GOLD (Materialized View)
+CREATE OR REFRESH MATERIALIZED VIEW gold_daily_sales
+AS SELECT order_date, sum(amount) FROM LIVE.silver_orders GROUP BY order_date;
+```
+---
 
