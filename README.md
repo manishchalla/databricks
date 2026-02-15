@@ -1149,3 +1149,457 @@ AS SELECT order_date, sum(amount) FROM LIVE.silver_orders GROUP BY order_date;
 ```
 ---
 
+---
+
+## ✅ 23. DLT: Data Quality & CDC (SCD Type 1 & 2)
+
+### **1. DLT Expectations (Data Quality)**
+| Constraint | Keyword | Behavior |
+| :--- | :--- | :--- |
+| **Warning** | `expect` | Keep data, log warning. |
+| **Drop** | `expect_or_drop` | Drop the bad row. |
+| **Fail** | `expect_or_fail` | Stop the pipeline. |
+
+### **2. Change Data Capture (CDC)**
+* **SCD Type 1:** Overwrite.
+* **SCD Type 2:** History.
+
+---
+
+### **Hands-On Practice: Expectations**
+
+**Python Syntax:**
+```python
+import dlt
+
+@dlt.table
+@dlt.expect("valid_id", "order_id IS NOT NULL")
+@dlt.expect_or_drop("positive_amt", "amount > 0")
+@dlt.expect_or_fail("has_date", "order_date IS NOT NULL")
+def clean_orders():
+    return dlt.readStream("bronze_orders")
+```
+
+**SQL Syntax:**
+```sql
+CREATE OR REFRESH STREAMING TABLE clean_orders
+(CONSTRAINT valid_id EXPECT (order_id IS NOT NULL),
+ CONSTRAINT positive_amt EXPECT (amount > 0) ON VIOLATION DROP ROW)
+AS SELECT * FROM STREAM(LIVE.bronze_orders);
+```
+
+### **Hands-On Practice: CDC (Updates)**
+
+**Python Syntax:**
+```python
+import dlt
+from pyspark.sql.functions import col
+
+dlt.create_streaming_table("target_customers")
+
+dlt.apply_changes(
+    target = "target_customers",
+    source = "bronze_customer_updates",
+    keys = ["customer_id"],
+    sequence_by = col("update_time"),
+    stored_as_scd_type = 1
+)
+```
+
+**SQL Syntax:**
+```sql
+CREATE OR REFRESH STREAMING TABLE target_customers;
+
+APPLY CHANGES INTO LIVE.target_customers
+FROM STREAM(LIVE.bronze_customer_updates)
+KEYS (customer_id)
+SEQUENCE BY update_time
+STORED AS SCD TYPE 1;
+```
+
+----
+---
+
+## ✅ 24. DLT Advanced: Append, Parameters & Dynamic Tables
+
+### **1. Append Flow (Union) & Autoloader**
+**Concept:** Combining multiple streams into one table (e.g., merging Sensor A and Sensor B).
+
+
+
+**Python Syntax (Union):**
+```python
+import dlt
+
+@dlt.table
+def combined_sensors():
+    # Stream 1
+    df_a = spark.readStream.format("cloud_files").load("/mnt/sensor_a/")
+    # Stream 2
+    df_b = spark.readStream.format("cloud_files").load("/mnt/sensor_b/")
+
+    # Union them (allowMissingColumns handles schema drift)
+    return df_a.unionByName(df_b, allowMissingColumns=True)
+```
+
+**SQL Syntax (Union):**
+```sql
+CREATE OR REFRESH STREAMING TABLE combined_sensors AS
+SELECT * FROM cloud_files("/mnt/sensor_a/", "json")
+UNION ALL
+SELECT * FROM cloud_files("/mnt/sensor_b/", "json")
+```
+
+---
+
+### **2. Pass Parameters in DLT**
+**Concept:** Use **Pipeline Settings** (JSON) to pass variables like `start_date` instead of hardcoding.
+
+**Python Syntax:**
+```python
+import dlt
+
+@dlt.table
+def filtered_sales():
+    # Get parameter from pipeline settings
+    start_date = spark.conf.get("my_start_date")
+    
+    return (
+        dlt.readStream("bronze_sales")
+        .filter(f"date > '{start_date}'")
+    )
+```
+
+**SQL Syntax:**
+```sql
+CREATE OR REFRESH STREAMING TABLE filtered_sales AS
+SELECT * FROM STREAM(LIVE.bronze_sales)
+WHERE date > '${my_start_date}'
+```
+
+---
+
+### **3. Generate Tables Dynamically (Metaprogramming)**
+**Concept:** Write **one loop** to generate 100 tables automatically. (Python Only).
+
+**Python Syntax:**
+```python
+import dlt
+
+# List of source tables to ingest
+source_list = ["orders", "customers", "products"]
+
+for table_name in source_list:
+    
+    # 1. Define the DLT table name dynamically
+    @dlt.table(name=f"bronze_{table_name}")
+    
+    # 2. Define the function (Use default arg to capture variable)
+    def create_bronze_table(t_name=table_name):
+        return (
+            spark.readStream.format("cloud_files")
+            .option("cloudFiles.format", "json")
+            .load(f"/mnt/landing/{t_name}/")
+        )
+```
+
+---
+
+---
+
+## ✅ 25. DLT: CDC & SCD (Type 1 & Type 2)
+**Concept:** Managing how data changes over time.
+* **SCD Type 1:** Overwrites existing records (No history).
+* **SCD Type 2:** Maintains history by adding new rows with timestamps/versions.
+
+### **1. Apply Changes (CDC)**
+The `APPLY CHANGES INTO` command automates the complex logic of merging updates and deletes from a source stream into a target table.
+
+
+
+### **2. Back-loading SCD2 Table**
+**Concept:** When you first start an SCD2 table, you must load historical data. DLT handles this during the initial pipeline run if the source contains the history and the `SEQUENCE BY` column (like a timestamp) is correctly defined.
+
+---
+
+### **Hands-On: SCD Type 1 (Overwrite)**
+
+**Python:**
+```python
+import dlt
+
+dlt.create_streaming_table("target_type1")
+
+dlt.apply_changes(
+    target = "target_type1",
+    source = "source_stream",
+    keys = ["user_id"],
+    sequence_by = "update_timestamp",
+    stored_as_scd_type = 1
+)
+```
+
+**SQL:**
+```sql
+CREATE OR REFRESH STREAMING TABLE target_type1;
+
+APPLY CHANGES INTO LIVE.target_type1
+FROM STREAM(LIVE.source_stream)
+KEYS (user_id)
+SEQUENCE BY update_timestamp
+STORED AS SCD TYPE 1;
+```
+
+---
+
+### **Hands-On: SCD Type 2 (History Tracking)**
+
+**Python:**
+```python
+import dlt
+
+dlt.create_streaming_table("target_type2")
+
+dlt.apply_changes(
+    target = "target_type2",
+    source = "source_stream",
+    keys = ["user_id"],
+    sequence_by = "update_timestamp",
+    stored_as_scd_type = 2
+)
+```
+
+**SQL:**
+```sql
+CREATE OR REFRESH STREAMING TABLE target_type2;
+
+APPLY CHANGES INTO LIVE.target_type2
+FROM STREAM(LIVE.source_stream)
+KEYS (user_id)
+SEQUENCE BY update_timestamp
+STORED AS SCD TYPE 2;
+```
+
+---
+
+### **3. Delete and Truncate in DLT**
+
+* **Delete Records:** In CDC, if your source has a column indicating a delete (e.g., `operation = 'DELETE'`), use the `APPLY AS DELETE WHEN` clause.
+* **Truncate Table:** DLT tables are managed by the pipeline. To truncate, you must **Full Refresh** the table from the DLT UI or drop the table manually in the Metastore/Unity Catalog.
+
+**SQL Example for Deletes:**
+```sql
+APPLY CHANGES INTO LIVE.target_table
+FROM STREAM(LIVE.source_stream)
+KEYS (user_id)
+SEQUENCE BY update_timestamp
+APPLY AS DELETE WHEN operation = 'DELETE'
+STORED AS SCD TYPE 1;
+```
+---
+---
+
+## ✅ 26. DLT: Deployment Modes & Maintenance
+**Concept:** Moving from writing code to running a reliable production pipeline.
+
+### **1. Pipeline Modes: Development vs. Production**
+Databricks provides two distinct "Run" modes to save costs during testing and ensure stability in production.
+
+| Feature | Development Mode | Production Mode |
+| :--- | :--- | :--- |
+| **Cluster Reuse** | Keeps cluster alive for 2 hours to avoid restart time. | Shuts down immediately after a triggered run to save cost. |
+| **Retries** | No automatic retries on failure. | Retries automatically if the pipeline fails. |
+| **Notifications** | Typically disabled. | Sends alerts (emails/Slack) on failure. |
+
+
+
+### **2. Execution Modes: Triggered vs. Continuous**
+* **Triggered:** Runs once, processes all available data, and stops. Best for daily/hourly batches to save cost.
+* **Continuous:** Runs 24/7. Ingests data as soon as it arrives in the source. Best for low-latency requirements.
+
+---
+
+### **3. DLT Maintenance & Full Refresh**
+Because DLT manages the underlying Delta tables, you don't usually run `VACUUM` or `OPTIMIZE` manually; DLT handles basic maintenance.
+
+* **Full Refresh:** This is the "Nuclear Option." It deletes the target table and re-processes all data from the beginning of the stream.
+    * *When to use:* Schema changes that are not compatible, or if you need to re-apply logic to historical data.
+* **Schema Evolution:** DLT can automatically detect new columns in the source and add them to the target without the pipeline failing.
+
+---
+
+### **Hands-On: Checking Pipeline Health (SQL)**
+You can query the **Event Log** to see exactly what the DLT pipeline is doing (e.g., how many rows passed an expectation).
+
+```sql
+-- Query the Event Log to see Data Quality metrics
+SELECT
+  id,
+  expectations.dataset,
+  expectations.name AS constraint_name,
+  expectations.passed_records,
+  expectations.failed_records
+FROM (
+  SELECT
+    id,
+    explode(from_json(details:results, 'array<struct<dataset:string, name:string, passed_records:int, failed_records:int>>')) AS expectations
+  FROM event_log_table
+  WHERE event_type = 'expectation_results'
+);
+```
+
+### **Hands-On: Setting a Pipeline to Continuous (JSON Configuration)**
+In the "JSON" view of your DLT settings, you toggle the mode here:
+
+```json
+{
+    "clusters": [ ... ],
+    "development": false,
+    "continuous": true,
+    "libraries": [ ... ],
+    "name": "Production_Sales_Pipeline"
+}
+```
+---
+---
+
+## ✅ 27. DLT: Data Quality & Observability
+**Concept:** Not just stopping bad data, but monitoring exactly how much "trash" is trying to enter your system.
+
+### **1. Defining Data Quality (DQ) Rules**
+We use **Expectations** to define DQ rules. These are simple SQL-like conditions that every row must pass.
+
+| Constraint | Keyword | Behavior |
+| :--- | :--- | :--- |
+| **Warning** | `expect` | Row is kept; failure is logged in metrics. |
+| **Drop** | `expect_or_drop` | Bad row is discarded; failure is logged. |
+| **Fail** | `expect_or_fail` | Pipeline stops immediately; no data is committed. |
+
+### **2. Observability & Monitoring**
+Databricks stores all pipeline events (start, stop, data quality results) in an **Event Log**. This is a hidden table you can query using SQL to build dashboards.
+
+
+
+---
+
+### **Hands-On: Defining DQ Rules**
+
+**Python Syntax:**
+```python
+import dlt
+
+@dlt.table
+@dlt.expect("valid_timestamp", "timestamp > '2020-01-01'")
+@dlt.expect_or_drop("valid_price", "price > 0")
+@dlt.expect_or_fail("has_id", "user_id IS NOT NULL")
+def bronze_orders():
+    return spark.readStream.format("cloud_files").load("/path/to/data")
+```
+
+**SQL Syntax:**
+```sql
+CREATE OR REFRESH STREAMING TABLE bronze_orders (
+  CONSTRAINT valid_timestamp EXPECT (timestamp > '2020-01-01'),
+  CONSTRAINT valid_price EXPECT (price > 0) ON VIOLATION DROP ROW,
+  CONSTRAINT has_id EXPECT (user_id IS NOT NULL) ON VIOLATION FAIL UPDATE
+) AS SELECT * FROM STREAM(LIVE.source_data);
+```
+
+---
+
+### **Hands-On: Monitoring with SQL (The Event Log)**
+To see your DQ metrics, you must find the storage location of your pipeline (the `storage` setting) and query the `event_log` table located there.
+
+**Query: See DQ Failure Rates**
+```sql
+SELECT
+  dataset,
+  tag,
+  expectations.name AS constraint_name,
+  expectations.passed_records,
+  expectations.failed_records
+FROM (
+  SELECT
+    details:flow_progress.metrics.output_dataset AS dataset,
+    details:flow_progress.status AS tag,
+    explode(from_json(details:flow_progress.data_quality.expectations, 
+            'array<struct<name:string, passed_records:int, failed_records:int>>')) AS expectations
+  FROM event_log_table
+  WHERE event_type = 'flow_progress'
+)
+WHERE dataset IS NOT NULL;
+```
+
+### **3. Advanced DQ: Quarantine (Best Practice)**
+Instead of just dropping rows, you can route them to a "quarantine" table.
+1.  **Table A:** Use `expect` (Warning) to flag records but keep them.
+2.  **Table B (Clean):** Filter Table A for only rows where `is_valid = true`.
+3.  **Table C (Quarantine):** Filter Table A for rows where `is_valid = false`.
+
+---
+---
+
+## ✅ 28. Unity Catalog (UC) Fundamentals
+**Concept:** A unified governance solution for all data and AI assets (files, tables, models) in your Databricks Lakehouse.
+
+### **1. The Three-Tier Namespace**
+Unlike the old Hive Metastore (`database.table`), Unity Catalog uses three levels to organize data:
+1.  **Catalog:** The top level (e.g., `production` or `marketing`).
+2.  **Schema (Database):** The middle level (e.g., `sales_data`).
+3.  **Table / View:** The lowest level (e.g., `transactions`).
+
+**Full Path:** `catalog_name.schema_name.table_name`
+
+
+
+### **2. Managed vs. External Tables**
+* **Managed Tables:** Databricks manages the lifecycle and the storage. If you `DROP TABLE`, the **data is deleted** from your cloud storage.
+* **External Tables:** You manage the storage path. If you `DROP TABLE`, only the metadata is gone; the **actual data files remain** in your S3/ADLS.
+
+---
+
+### **3. Identities: Users, Groups, and Service Principals**
+Unity Catalog manages access for:
+* **Users:** Individual people (identified by email).
+* **Groups:** Collections of users for easier permission management.
+* **Service Principals:** Non-human identities (for automated jobs/pipelines).
+
+---
+
+### **Hands-On: Permissions (SQL)**
+Unity Catalog uses standard SQL `GRANT` and `REVOKE` statements.
+
+```sql
+-- 1. Grant usage on a Catalog
+GRANT USAGE ON CATALOG production TO `finance_team`;
+
+-- 2. Grant usage on a Schema
+GRANT USAGE ON SCHEMA production.sales TO `finance_team`;
+
+-- 3. Grant select access on a Table
+GRANT SELECT ON TABLE production.sales.transactions TO `finance_team`;
+
+-- 4. Revoke access
+REVOKE SELECT ON TABLE production.sales.transactions FROM `finance_team`;
+```
+
+### **Hands-On: Creating a Catalog and Schema**
+
+```sql
+-- Create a new Catalog
+CREATE CATALOG IF NOT EXISTS finance_catalog;
+
+-- Select the Catalog for the current session
+USE CATALOG finance_catalog;
+
+-- Create a Schema within that Catalog
+CREATE SCHEMA IF NOT EXISTS audit_logs;
+
+-- Create a table inside the schema
+CREATE TABLE finance_catalog.audit_logs.login_history (
+    user_id STRING,
+    login_time TIMESTAMP
+);
+```
+---
+
